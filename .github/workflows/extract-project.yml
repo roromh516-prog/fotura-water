@@ -19,7 +19,10 @@ jobs:
       - name: List extracted files
         run: |
           echo "=== Extracted project ==="
-          find extracted -type f | sort
+          find extracted -type f | sort- name: Show MainActivity
+  run: |
+    echo "=== MainActivity.java ==="
+    cat extracted/fotura_cloud/app/src/main/java/com/example/fotura/MainActivity.java
 
       - name: Upload extracted project
         uses: actions/upload-artifact@v4
