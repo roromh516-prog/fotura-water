@@ -5,6 +5,9 @@ on:
   push:
     branches: ["main"]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,7 +17,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Unzip project
-        run: unzip -q fotura_android_cloud_ready.zip
+        run: |
+          rm -rf fotura_cloud
+          unzip -q fotura_android_cloud_ready.zip
+          echo "=== Project files ==="
+          find fotura_cloud -maxdepth 3 -type f | sort | head -100
 
       - name: Set up Java
         uses: actions/setup-java@v6
@@ -39,10 +46,20 @@ jobs:
 
       - name: Build APK
         working-directory: fotura_cloud
-        run: gradle --no-daemon :app:assembleDebug
+        run: |
+          gradle --no-daemon clean :app:assembleDebug
+
+      - name: Verify APK
+        run: |
+          echo "=== APK files found ==="
+          find fotura_cloud/app/build/outputs -type f -name "*.apk" -exec ls -lh {} \;
+          echo "=== APK details ==="
+          file fotura_cloud/app/build/outputs/apk/debug/app-debug.apk
+          test -s fotura_cloud/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: نظام-الفوترة-APK
+          name: نظام-فاتورة-apk
           path: fotura_cloud/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
