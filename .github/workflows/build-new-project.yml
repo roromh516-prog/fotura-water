@@ -3,9 +3,6 @@ name: Build New Fotura Project
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -20,32 +17,117 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - name: Create Project
+        run: |
+          mkdir -p fotura_new/app/src/main/java/com/example/fotura
+          mkdir -p fotura_new/app/src/main/res/values
+
+          cat > fotura_new/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "FoturaNew"
+          include(":app")
+          EOF
+
+          cat > fotura_new/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > fotura_new/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.example.fotura'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.example.fotura'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0'
+              }
+          }
+          EOF
+
+          cat > fotura_new/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:theme="@style/AppTheme"
+                  android:label="نظام فاتورة">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > fotura_new/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:layoutDirection">rtl</item>
+                  <item name="android:textDirection">rtl</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > fotura_new/app/src/main/java/com/example/fotura/MainActivity.java <<'EOF'
+          package com.example.fotura;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.widget.TextView;
+
+          public class MainActivity extends Activity {
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  TextView text = new TextView(this);
+                  text.setText("نظام فاتورة");
+                  text.setTextSize(28);
+                  text.setGravity(17);
+                  setContentView(text);
+              }
+          }
+          EOF
 
       - name: Build APK
         working-directory: fotura_new
         run: |
-          chmod +x gradlew 2>/dev/null || true
           gradle --no-daemon clean :app:assembleDebug
 
       - name: Check APK
         run: |
-          echo "=== APK files ==="
           find fotura_new/app/build/outputs -type f -name "*.apk" -ls
-
-      - name: Create APK ZIP
-        run: |
-          mkdir -p apk_output
-          cp fotura_new/app/build/outputs/apk/debug/app-debug.apk apk_output/نظام-فاتورة.apk
-          cd apk_output
-          zip -9 نظام-فاتورة-apk.zip نظام-فاتورة.apk
-          cd ..
-          ls -lh apk_output/
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: نظام-فاتورة-apk
-          path: apk_output/نظام-فاتورة-apk.zip
+          path: fotura_new/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
