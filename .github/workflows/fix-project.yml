@@ -11,91 +11,150 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Fix Android project
+      - name: Fix project
         run: |
           python3 <<'PY'
           import zipfile
           import os
-          import re
           import shutil
 
-          zip_path = "fotura_android_cloud_ready.zip"
-          work = "fixed_project"
+          ZIP = "fotura_android_cloud_ready.zip"
+          WORK = "fixed_project"
 
-          if os.path.exists(work):
-              shutil.rmtree(work)
+          if os.path.exists(WORK):
+              shutil.rmtree(WORK)
 
-          os.makedirs(work)
+          os.makedirs(WORK)
 
-          with zipfile.ZipFile(zip_path, "r") as z:
-              z.extractall(work)
+          with zipfile.ZipFile(ZIP, "r") as z:
+              z.extractall(WORK)
 
-          java_files = []
-          for root, dirs, files in os.walk(work):
-              for f in files:
-                  if f == "MainActivity.java":
-                      java_files.append(os.path.join(root, f))
+          java = None
 
-          if not java_files:
+          for root, dirs, files in os.walk(WORK):
+              for name in files:
+                  if name == "MainActivity.java":
+                      java = os.path.join(root, name)
+                      break
+              if java:
+                  break
+
+          if not java:
               raise Exception("MainActivity.java not found")
-
-          java = java_files[0]
 
           with open(java, "r", encoding="utf-8") as f:
               s = f.read()
 
-          old_oncreate = '''@Override public void onCreate(Bundle b) { super.onCreate(b); getWindow().setStatusBarColor(darkBlue); build(); }'''
+          old = "onCreate(Bundle b) { super.onCreate(b); getWindow().setStatusBarColor(darkBlue); build(); }"
 
-          new_oncreate = '''@Override public void onCreate(Bundle b) {
+          new = """onCreate(Bundle b) {
               super.onCreate(b);
               getWindow().setStatusBarColor(darkBlue);
               loadRows();
               build();
-          }'''
+          }"""
 
-          if old_oncreate in s:
-              s = s.replace(old_oncreate, new_oncreate, 1)
+          s = s.replace(old, new, 1)
 
-          old_result = '''@Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(r==10&&c==RESULT_OK&&d!=null){try{rows=readXlsx(d.getData());Toast.makeText(this,"تم استيراد "+rows.size()+" مشترك بنجاح",Toast.LENGTH_LONG).show();build();}catch(Exception e){Toast.makeText(this,"تعذر قراءة الملف: "+e.getMessage(),Toast.LENGTH_LONG).show();}}}'''
+          old2 = """@Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(r==10&&c==RESULT_OK&&d!=null){try{rows=readXlsx(d.getData());Toast.makeText(this,"تم استيراد "+rows.size()+" مشترك بنجاح",Toast.LENGTH_LONG).show();build();}catch(Exception e){Toast.makeText(this,"تعذر قراءة الملف: "+e.getMessage(),Toast.LENGTH_LONG).show();}}}"""
 
-          new_result = '''@Override protected void onActivityResult(int r,int c,Intent d){
+          new2 = """@Override protected void onActivityResult(int r,int c,Intent d){
               super.onActivityResult(r,c,d);
               if(r==10&&c==RESULT_OK&&d!=null){
                   final Uri u=d.getData();
                   if(u==null)return;
-
                   Toast.makeText(this,"جارٍ استيراد الملف...",Toast.LENGTH_SHORT).show();
-
                   new Thread(()->{
                       try{
                           ArrayList<Row> imported=readXlsx(u);
-
                           runOnUiThread(()->{
                               rows=imported;
                               saveRows();
                               Toast.makeText(this,"تم استيراد "+rows.size()+" مشترك بنجاح",Toast.LENGTH_LONG).show();
                               build();
                           });
-
                       }catch(Exception e){
                           runOnUiThread(()->Toast.makeText(this,"تعذر قراءة الملف: "+e.getMessage(),Toast.LENGTH_LONG).show());
                       }
                   }).start();
               }
-          }'''
+          }"""
 
-          if old_result in s:
-              s = s.replace(old_result, new_result, 1)
+          s = s.replace(old2, new2, 1)
 
-          marker = 'setContentView(root);'
+          persistence = """File dataFile(){
+              return new File(getFilesDir(),"customers.dat");
+          }
 
-          clear_button = '''Button clearData=new Button(this);
+          void saveRows(){
+              try{
+                  File f=dataFile();
+                  DataOutputStream o=new DataOutputStream(
+                      new BufferedOutputStream(
+                          new FileOutputStream(f)));
+                  o.writeInt(1);
+                  o.writeInt(rows.size());
+                  for(Row r:rows){
+                      o.writeUTF(r.name==null?"":r.name);
+                      o.writeUTF(r.type==null?"":r.type);
+                      o.writeUTF(r.meter==null?"":r.meter);
+                      o.writeUTF(r.barcode==null?"":r.barcode);
+                      o.writeUTF(r.prev==null?"":r.prev);
+                      o.writeDouble(r.arrears);
+                  }
+                  o.close();
+              }catch(Exception ignored){}
+          }
+
+          void loadRows(){
+              rows.clear();
+              File f=dataFile();
+              if(!f.exists())return;
+              try{
+                  DataInputStream in=new DataInputStream(
+                      new BufferedInputStream(
+                          new FileInputStream(f)));
+                  int version=in.readInt();
+                  int n=in.readInt();
+                  if(version!=1||n<0||n>1000000)throw new Exception();
+                  for(int i=0;i<n;i++){
+                      Row r=new Row();
+                      r.name=in.readUTF();
+                      r.type=in.readUTF();
+                      r.meter=in.readUTF();
+                      r.barcode=in.readUTF();
+                      r.prev=in.readUTF();
+                      r.arrears=in.readDouble();
+                      rows.add(r);
+                  }
+                  in.close();
+              }catch(Exception e){
+                  rows.clear();
+              }
+          }
+
+          void clearRows(){
+              rows.clear();
+              File f=dataFile();
+              if(f.exists())f.delete();
+              build();
+              Toast.makeText(this,"تم حذف جميع البيانات",Toast.LENGTH_LONG).show();
+          }
+
+          """
+
+          if "File dataFile()" not in s:
+              p = s.find("static class Row")
+              if p < 0:
+                  raise Exception("Row class not found")
+              s = s[:p] + persistence + s[p:]
+
+          button = """Button clearData=new Button(this);
           clearData.setText("حذف جميع البيانات");
           clearData.setAllCaps(false);
-          clearData.setTextColor(Color.rgb(190,40,40));
           clearData.setOnClickListener(v->new AlertDialog.Builder(this)
               .setTitle("حذف البيانات")
               .setMessage("سيتم حذف جميع بيانات المشتركين من التطبيق.")
@@ -105,115 +164,174 @@ jobs:
           content.addView(clearData,new LinearLayout.LayoutParams(-1,dp(52)));
           margin(clearData,0,8,0,8);
 
-          '''
+          """
 
-          if marker in s and "حذف جميع البيانات" not in s:
-              s = s.replace(marker, clear_button + marker, 1)
+          if "حذف جميع البيانات" not in s:
+              s=s.replace("setContentView(root);",button+"setContentView(root);",1)
 
-          persistence = r'''
-          File dataFile(){ return new File(getFilesDir(),"customers.dat"); }
+          start=s.find("ArrayList<Row> readXlsx(Uri u)throws Exception{")
+          end=s.find("String find(",start)
 
-          void saveRows(){
-              File f=dataFile();
-              try{
-                  File tmp=new File(getFilesDir(),"customers.tmp");
-
-                  DataOutputStream o=new DataOutputStream(
-                      new BufferedOutputStream(
-                          new FileOutputStream(tmp)));
-
-                  o.writeInt(1);
-                  o.writeInt(rows.size());
-
-                  for(Row r:rows){
-                      o.writeUTF(r.name==null?"":r.name);
-                      o.writeUTF(r.type==null?"":r.type);
-                      o.writeUTF(r.meter==null?"":r.meter);
-                      o.writeUTF(r.barcode==null?"":r.barcode);
-                      o.writeUTF(r.prev==null?"":r.prev);
-                      o.writeDouble(r.arrears);
-                  }
-
-                  o.flush();
-                  o.close();
-
-                  if(f.exists())f.delete();
-                  tmp.renameTo(f);
-
-              }catch(Exception ignored){}
-          }
-
-          void loadRows(){
-              rows.clear();
-
-              File f=dataFile();
-              if(!f.exists())return;
-
-              try{
-                  DataInputStream in=new DataInputStream(
-                      new BufferedInputStream(
-                          new FileInputStream(f)));
-
-                  int version=in.readInt();
-                  int n=in.readInt();
-
-                  if(version!=1||n<0||n>1000000)
-                      throw new Exception("invalid");
-
-                  for(int i=0;i<n;i++){
-                      Row r=new Row();
-
-                      r.name=in.readUTF();
-                      r.type=in.readUTF();
-                      r.meter=in.readUTF();
-                      r.barcode=in.readUTF();
-                      r.prev=in.readUTF();
-                      r.arrears=in.readDouble();
-
-                      rows.add(r);
-                  }
-
-                  in.close();
-
-              }catch(Exception e){
-                  rows.clear();
-              }
-          }
-
-          void clearRows(){
-              rows.clear();
-
-              File f=dataFile();
-              if(f.exists())f.delete();
-
-              build();
-
-              Toast.makeText(
-                  this,
-                  "تم حذف جميع البيانات",
-                  Toast.LENGTH_LONG
-              ).show();
-          }
-
-          '''
-
-          if "File dataFile()" not in s:
-              pos = s.find("static class Row")
-              if pos < 0:
-                  raise Exception("Row class not found")
-              s = s[:pos] + persistence + s[pos:]
-
-          start = s.find("ArrayList<Row> readXlsx(Uri u)throws Exception{")
-          end = s.find("String find(", start)
-
-          if start < 0 or end < 0:
+          if start<0 or end<0:
               raise Exception("readXlsx method not found")
 
-          streaming = r'''ArrayList<Row> readXlsx(Uri u)throws Exception{
+          method="""ArrayList<Row> readXlsx(Uri u)throws Exception{
               ArrayList<Row> out=new ArrayList<>();
-
               InputStream in=getContentResolver().openInputStream(u);
               if(in==null)throw new Exception("تعذر فتح الملف");
 
-              File sheetFile=File.createTempFile(
-                  "
+              ZipInputStream z=new ZipInputStream(
+                  new BufferedInputStream(in));
+
+              ZipEntry e;
+              ArrayList<String> ss=new ArrayList<>();
+              File sheetFile=File.createTempFile("sheet",".xml",getCacheDir());
+              FileOutputStream sf=new FileOutputStream(sheetFile);
+              boolean sheetFound=false;
+
+              while((e=z.getNextEntry())!=null){
+                  if("xl/sharedStrings.xml".equals(e.getName())){
+                      org.xmlpull.v1.XmlPullParser p=android.util.Xml.newPullParser();
+                      p.setInput(z,"UTF-8");
+                      StringBuilder b=null;
+                      int ev;
+                      while((ev=p.next())!=org.xmlpull.v1.XmlPullParser.END_DOCUMENT){
+                          if(ev==org.xmlpull.v1.XmlPullParser.START_TAG){
+                              if("si".equals(p.getName()))b=new StringBuilder();
+                              else if("t".equals(p.getName())&&b!=null)b.append(p.nextText());
+                          }else if(ev==org.xmlpull.v1.XmlPullParser.END_TAG&&"si".equals(p.getName())&&b!=null){
+                              ss.add(b.toString());
+                              b=null;
+                          }
+                      }
+                  }else if("xl/worksheets/sheet1.xml".equals(e.getName())){
+                      byte[] buf=new byte[16384];
+                      int n;
+                      while((n=z.read(buf))!=-1)sf.write(buf,0,n);
+                      sheetFound=true;
+                  }
+                  z.closeEntry();
+              }
+
+              sf.close();
+              z.close();
+              in.close();
+
+              if(!sheetFound)throw new Exception("لم يتم العثور على ورقة Excel الأولى");
+
+              org.xmlpull.v1.XmlPullParser p=android.util.Xml.newPullParser();
+              FileInputStream fi=new FileInputStream(sheetFile);
+              p.setInput(fi,"UTF-8");
+
+              String[] header=null;
+              int ev;
+
+              while((ev=p.next())!=org.xmlpull.v1.XmlPullParser.END_DOCUMENT){
+                  if(ev!=org.xmlpull.v1.XmlPullParser.START_TAG||!"row".equals(p.getName()))continue;
+
+                  String[] row=new String[20];
+
+                  while(true){
+                      ev=p.next();
+
+                      if(ev==org.xmlpull.v1.XmlPullParser.END_TAG&&"row".equals(p.getName()))break;
+
+                      if(ev==org.xmlpull.v1.XmlPullParser.START_TAG&&"c".equals(p.getName())){
+                          String ref=p.getAttributeValue(null,"r");
+                          String type=p.getAttributeValue(null,"t");
+                          int col=0;
+
+                          if(ref!=null){
+                              for(int i=0;i<ref.length();i++){
+                                  char ch=ref.charAt(i);
+                                  if(Character.isLetter(ch))
+                                      col=col*26+(Character.toUpperCase(ch)-'A'+1);
+                                  else break;
+                              }
+                              col--;
+                          }
+
+                          if(col<0)col=0;
+                          if(col>=row.length)row=Arrays.copyOf(row,col+5);
+
+                          String value="";
+
+                          while(true){
+                              ev=p.next();
+
+                              if(ev==org.xmlpull.v1.XmlPullParser.END_TAG&&"c".equals(p.getName()))break;
+
+                              if(ev==org.xmlpull.v1.XmlPullParser.START_TAG&&"v".equals(p.getName())){
+                                  value=p.nextText();
+                              }else if(ev==org.xmlpull.v1.XmlPullParser.START_TAG&&"t".equals(p.getName())&&"inlineStr".equals(type)){
+                                  value=p.nextText();
+                              }
+                          }
+
+                          if("s".equals(type)&&!value.isEmpty()){
+                              int idx=Integer.parseInt(value);
+                              if(idx>=0&&idx<ss.size())value=ss.get(idx);
+                              else value="";
+                          }
+
+                          row[col]=value;
+                      }
+                  }
+
+                  if(header==null){
+                      header=row;
+                      continue;
+                  }
+
+                  Row r=new Row();
+                  r.name=find(row,header,"الاسم","الكنية","اسم");
+                  r.type=find(row,header,"رمز الاحتساب","نوع","الاحتساب");
+                  r.meter=find(row,header,"رقم العداد","عداد");
+                  r.barcode=find(row,header,"باركود");
+                  r.prev=find(row,header,"التأشيرة السابقة","القراءة السابقة");
+
+                  String ar=find(row,header,"إجمالي الفواتير غير المدفوعة","المتأخرات");
+
+                  try{
+                      r.arrears=Double.parseDouble(ar.replace(",",""));
+                  }catch(Exception ignored){}
+
+                  out.add(r);
+              }
+
+              fi.close();
+              sheetFile.delete();
+
+              return out;
+          }
+
+          """
+
+          s=s[:start]+method+s[end:]
+
+          with open(java,"w",encoding="utf-8") as f:
+              f.write(s)
+
+          print("FIXED:",java)
+
+          newzip="new_project.zip"
+
+          with zipfile.ZipFile(newzip,"w",zipfile.ZIP_DEFLATED) as z:
+              for root,dirs,files in os.walk(WORK):
+                  for name in files:
+                      path=os.path.join(root,name)
+                      z.write(path,os.path.relpath(path,WORK))
+
+          os.replace(newzip,ZIP)
+
+          print("ZIP REPLACED")
+
+          PY
+
+      - name: Commit fixed project
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fotura_android_cloud_ready.zip
+          git commit -m "Fix Excel import and data storage"
+          git push
