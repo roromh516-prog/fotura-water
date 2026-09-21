@@ -1,0 +1,219 @@
+name: Fix Project
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fix Android project
+        run: |
+          python3 <<'PY'
+          import zipfile
+          import os
+          import re
+          import shutil
+
+          zip_path = "fotura_android_cloud_ready.zip"
+          work = "fixed_project"
+
+          if os.path.exists(work):
+              shutil.rmtree(work)
+
+          os.makedirs(work)
+
+          with zipfile.ZipFile(zip_path, "r") as z:
+              z.extractall(work)
+
+          java_files = []
+          for root, dirs, files in os.walk(work):
+              for f in files:
+                  if f == "MainActivity.java":
+                      java_files.append(os.path.join(root, f))
+
+          if not java_files:
+              raise Exception("MainActivity.java not found")
+
+          java = java_files[0]
+
+          with open(java, "r", encoding="utf-8") as f:
+              s = f.read()
+
+          old_oncreate = '''@Override public void onCreate(Bundle b) { super.onCreate(b); getWindow().setStatusBarColor(darkBlue); build(); }'''
+
+          new_oncreate = '''@Override public void onCreate(Bundle b) {
+              super.onCreate(b);
+              getWindow().setStatusBarColor(darkBlue);
+              loadRows();
+              build();
+          }'''
+
+          if old_oncreate in s:
+              s = s.replace(old_oncreate, new_oncreate, 1)
+
+          old_result = '''@Override protected void onActivityResult(int r,int c,Intent d){super.onActivityResult(r,c,d);if(r==10&&c==RESULT_OK&&d!=null){try{rows=readXlsx(d.getData());Toast.makeText(this,"تم استيراد "+rows.size()+" مشترك بنجاح",Toast.LENGTH_LONG).show();build();}catch(Exception e){Toast.makeText(this,"تعذر قراءة الملف: "+e.getMessage(),Toast.LENGTH_LONG).show();}}}'''
+
+          new_result = '''@Override protected void onActivityResult(int r,int c,Intent d){
+              super.onActivityResult(r,c,d);
+              if(r==10&&c==RESULT_OK&&d!=null){
+                  final Uri u=d.getData();
+                  if(u==null)return;
+
+                  Toast.makeText(this,"جارٍ استيراد الملف...",Toast.LENGTH_SHORT).show();
+
+                  new Thread(()->{
+                      try{
+                          ArrayList<Row> imported=readXlsx(u);
+
+                          runOnUiThread(()->{
+                              rows=imported;
+                              saveRows();
+                              Toast.makeText(this,"تم استيراد "+rows.size()+" مشترك بنجاح",Toast.LENGTH_LONG).show();
+                              build();
+                          });
+
+                      }catch(Exception e){
+                          runOnUiThread(()->Toast.makeText(this,"تعذر قراءة الملف: "+e.getMessage(),Toast.LENGTH_LONG).show());
+                      }
+                  }).start();
+              }
+          }'''
+
+          if old_result in s:
+              s = s.replace(old_result, new_result, 1)
+
+          marker = 'setContentView(root);'
+
+          clear_button = '''Button clearData=new Button(this);
+          clearData.setText("حذف جميع البيانات");
+          clearData.setAllCaps(false);
+          clearData.setTextColor(Color.rgb(190,40,40));
+          clearData.setOnClickListener(v->new AlertDialog.Builder(this)
+              .setTitle("حذف البيانات")
+              .setMessage("سيتم حذف جميع بيانات المشتركين من التطبيق.")
+              .setNegativeButton("إلغاء",null)
+              .setPositiveButton("حذف",(d,w)->clearRows())
+              .show());
+          content.addView(clearData,new LinearLayout.LayoutParams(-1,dp(52)));
+          margin(clearData,0,8,0,8);
+
+          '''
+
+          if marker in s and "حذف جميع البيانات" not in s:
+              s = s.replace(marker, clear_button + marker, 1)
+
+          persistence = r'''
+          File dataFile(){ return new File(getFilesDir(),"customers.dat"); }
+
+          void saveRows(){
+              File f=dataFile();
+              try{
+                  File tmp=new File(getFilesDir(),"customers.tmp");
+
+                  DataOutputStream o=new DataOutputStream(
+                      new BufferedOutputStream(
+                          new FileOutputStream(tmp)));
+
+                  o.writeInt(1);
+                  o.writeInt(rows.size());
+
+                  for(Row r:rows){
+                      o.writeUTF(r.name==null?"":r.name);
+                      o.writeUTF(r.type==null?"":r.type);
+                      o.writeUTF(r.meter==null?"":r.meter);
+                      o.writeUTF(r.barcode==null?"":r.barcode);
+                      o.writeUTF(r.prev==null?"":r.prev);
+                      o.writeDouble(r.arrears);
+                  }
+
+                  o.flush();
+                  o.close();
+
+                  if(f.exists())f.delete();
+                  tmp.renameTo(f);
+
+              }catch(Exception ignored){}
+          }
+
+          void loadRows(){
+              rows.clear();
+
+              File f=dataFile();
+              if(!f.exists())return;
+
+              try{
+                  DataInputStream in=new DataInputStream(
+                      new BufferedInputStream(
+                          new FileInputStream(f)));
+
+                  int version=in.readInt();
+                  int n=in.readInt();
+
+                  if(version!=1||n<0||n>1000000)
+                      throw new Exception("invalid");
+
+                  for(int i=0;i<n;i++){
+                      Row r=new Row();
+
+                      r.name=in.readUTF();
+                      r.type=in.readUTF();
+                      r.meter=in.readUTF();
+                      r.barcode=in.readUTF();
+                      r.prev=in.readUTF();
+                      r.arrears=in.readDouble();
+
+                      rows.add(r);
+                  }
+
+                  in.close();
+
+              }catch(Exception e){
+                  rows.clear();
+              }
+          }
+
+          void clearRows(){
+              rows.clear();
+
+              File f=dataFile();
+              if(f.exists())f.delete();
+
+              build();
+
+              Toast.makeText(
+                  this,
+                  "تم حذف جميع البيانات",
+                  Toast.LENGTH_LONG
+              ).show();
+          }
+
+          '''
+
+          if "File dataFile()" not in s:
+              pos = s.find("static class Row")
+              if pos < 0:
+                  raise Exception("Row class not found")
+              s = s[:pos] + persistence + s[pos:]
+
+          start = s.find("ArrayList<Row> readXlsx(Uri u)throws Exception{")
+          end = s.find("String find(", start)
+
+          if start < 0 or end < 0:
+              raise Exception("readXlsx method not found")
+
+          streaming = r'''ArrayList<Row> readXlsx(Uri u)throws Exception{
+              ArrayList<Row> out=new ArrayList<>();
+
+              InputStream in=getContentResolver().openInputStream(u);
+              if(in==null)throw new Exception("تعذر فتح الملف");
+
+              File sheetFile=File.createTempFile(
+                  "
